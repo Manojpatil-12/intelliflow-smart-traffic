@@ -1,0 +1,418 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Analytics — IntelliFlow{% endblock %}
+{% block page_title %}Analytics{% endblock %}
+
+{% block extra_css %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- ═══ What-If Congestion Predictor (TOP) ═══ -->
+<div class="card" style="border-left: 4px solid var(--moderate);">
+    <h3 style="margin-bottom: var(--space-2);">What-If Congestion Predictor</h3>
+    <p style="color: var(--lane-400); font-size: 0.85rem; margin-bottom: var(--space-2);">
+        Enter traffic parameters to predict congestion class and optimal green signal timing using the trained ML model.
+    </p>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto; gap: var(--space-2); align-items: end;">
+        <div class="form-group" style="margin-bottom:0;">
+            <label>Number of Vehicles</label>
+            <input type="number" id="wif-vehicles" min="1000" max="80000" value="25000" step="500" placeholder="e.g. 25000">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+            <label>Time of Day (Hour)</label>
+            <select id="wif-hour">
+                <option value="6">06:00 - Early Morning</option>
+                <option value="8">08:00 - Morning Rush</option>
+                <option value="10">10:00 - Mid Morning</option>
+                <option value="12" selected>12:00 - Afternoon</option>
+                <option value="14">14:00 - Post Lunch</option>
+                <option value="17">17:00 - Evening Rush</option>
+                <option value="19">19:00 - Evening</option>
+                <option value="21">21:00 - Night</option>
+            </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+            <label>Weather Condition</label>
+            <select id="wif-weather">
+                <option value="Clear">Clear</option>
+                <option value="Overcast">Overcast</option>
+                <option value="Rain">Rain</option>
+                <option value="Fog">Fog</option>
+                <option value="Windy">Windy</option>
+            </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+            <label>Intersection (optional)</label>
+            <select id="wif-intersection">
+                <option value="">— Auto-select —</option>
+                {% for ix in intersections %}
+                <option value="{{ ix.pk }}">{{ ix.intersection_id }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button class="btn btn-primary" id="wif-btn" style="height:38px; white-space:nowrap;">
+            Predict
+        </button>
+    </div>
+
+    <!-- Loading -->
+    <div id="wif-loader" style="display:none; text-align:center; padding: var(--space-3);">
+        <div style="display:inline-block; width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--beacon); border-radius:50%; animation:spin 0.8s linear infinite;"></div>
+        <p style="color:var(--lane-400); margin-top:var(--space-1); font-size:0.85rem;">Running ML model prediction...</p>
+    </div>
+    <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+    <!-- Result -->
+    <div id="wif-result" style="display:none; margin-top: var(--space-2);">
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-2);">
+            <div class="metric-card" id="wif-class-card">
+                <div class="metric-label">Predicted Congestion</div>
+                <div class="metric-value" id="wif-class" style="text-transform:uppercase;"></div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Congestion Level</div>
+                <div class="metric-value mono" id="wif-level"></div>
+                <span class="metric-unit">%</span>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Predicted Volume</div>
+                <div class="metric-value mono" id="wif-volume"></div>
+                <span class="metric-unit">vehicles</span>
+            </div>
+            <div class="metric-card" style="border-left: 4px solid var(--flow);">
+                <div class="metric-label">Recommended Green Signal</div>
+                <div class="metric-value mono" id="wif-green" style="color:var(--flow);"></div>
+                <span class="metric-unit">seconds</span>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Model Confidence</div>
+                <div class="metric-value mono" id="wif-confidence"></div>
+                <span class="metric-unit">%</span>
+            </div>
+        </div>
+
+        <!-- Probability Bars -->
+        <div style="margin-top: var(--space-2);">
+            <h4 style="font-size: 0.85rem; color: var(--lane-400); margin-bottom: var(--space-1);">Class Probabilities</h4>
+            <div class="probability-bars" id="wif-probabilities"></div>
+        </div>
+
+        <!-- Signal Timing Explanation -->
+        <div class="banner banner-info" style="margin-top: var(--space-2);" id="wif-signal-explain"></div>
+    </div>
+
+    <!-- Error -->
+    <div id="wif-error" style="display:none;" class="alert alert-error"></div>
+</div>
+
+<!-- Honesty Panel -->
+<div class="card" style="border-left: 4px solid var(--beacon);">
+    <h3>Model Transparency</h3>
+    <p style="color: var(--lane-400); line-height: 1.7; font-size: 0.9rem;">
+        This system predicts <strong>next-day</strong> traffic congestion and volume. The model was trained on
+        <strong>daily-granularity</strong> data with a <strong>t+1 day horizon</strong> — it forecasts tomorrow's conditions,
+        not the next 15 minutes.<br><br>
+        <strong>Classification accuracy of 73.08%</strong> means that roughly 3 in 4 intersection-day predictions
+        correctly identify the congestion class (low/moderate/high/severe). The <strong>Macro-F1 of 0.6858</strong>
+        is reported alongside accuracy because it accounts for class imbalance — the dataset has more "severe"
+        days than "low" days. Balanced accuracy of 67.47% shows performance across all classes equally weighted.<br><br>
+        <strong>Regression MAE of 5,200 vehicles</strong> means the volume prediction is off by about 5,200 vehicles on average.
+        The <strong>MAPE of 23.84%</strong> and <strong>R² of 0.588</strong> indicate moderate predictive power — useful for
+        planning and decision support, not precise traffic control.
+    </p>
+</div>
+
+<!-- Winner Highlight -->
+<div class="dashboard-grid" style="margin-top: var(--space-2);">
+    <div class="card" style="border-left: 4px solid var(--flow);">
+        <h3>Best Classifier: {{ best_classifier }}</h3>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Accuracy</span>
+                <span class="detail-value mono">73.08%</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Macro-F1</span>
+                <span class="detail-value mono">0.6858</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Balanced Accuracy</span>
+                <span class="detail-value mono">67.47%</span>
+            </div>
+        </div>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--beacon);">
+        <h3>Best Regressor: {{ best_regressor }}</h3>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">MAE</span>
+                <span class="detail-value mono">5,200</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">RMSE</span>
+                <span class="detail-value mono">7,685</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">MAPE</span>
+                <span class="detail-value mono">23.84%</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">R²</span>
+                <span class="detail-value mono">0.588</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="detail-grid" style="margin-top: var(--space-1);">
+    <div class="detail-item">
+        <span class="detail-label">Features</span>
+        <span class="detail-value mono">83</span>
+    </div>
+    <div class="detail-item">
+        <span class="detail-label">Horizon</span>
+        <span class="detail-value mono">t+1 day</span>
+    </div>
+    <div class="detail-item">
+        <span class="detail-label">Split</span>
+        <span class="detail-value mono">time-based</span>
+    </div>
+    <div class="detail-item">
+        <span class="detail-label">Intersections</span>
+        <span class="detail-value mono">16</span>
+    </div>
+</div>
+
+<!-- Classification Leaderboard -->
+<div class="card" style="margin-top: var(--space-3);">
+    <h3>Classification Benchmark ({{ cls_leaderboard|length }} models)</h3>
+    {% if cls_leaderboard %}
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    {% for key in cls_leaderboard.0.keys %}
+                    <th>{{ key }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in cls_leaderboard %}
+                <tr {% if row.Model == best_classifier %}style="background: rgba(33,201,122,0.08);"{% endif %}>
+                    {% for val in row.values %}
+                    <td class="mono">{{ val }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p class="empty-state-text">No classification leaderboard data.</p></div>
+    {% endif %}
+</div>
+
+<!-- Regression Leaderboard -->
+<div class="card" style="margin-top: var(--space-2);">
+    <h3>Regression Benchmark ({{ reg_leaderboard|length }} models)</h3>
+    {% if reg_leaderboard %}
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    {% for key in reg_leaderboard.0.keys %}
+                    <th>{{ key }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in reg_leaderboard %}
+                <tr {% if row.Model == best_regressor %}style="background: rgba(34,211,238,0.08);"{% endif %}>
+                    {% for val in row.values %}
+                    <td class="mono">{{ val }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p class="empty-state-text">No regression leaderboard data.</p></div>
+    {% endif %}
+</div>
+
+<!-- Feature Importance Chart -->
+<div class="card" style="margin-top: var(--space-2);">
+    <h3>Top-25 Feature Importance</h3>
+    <canvas id="featureChart" height="400"></canvas>
+</div>
+
+<!-- Confusion Matrix -->
+{% if confusion_data != "null" %}
+<div class="card" style="margin-top: var(--space-2);">
+    <h3>Confusion Matrix ({{ best_classifier }} — Test Set)</h3>
+    <canvas id="confusionChart" height="300"></canvas>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Feature Importance
+const fiData = {{ feature_importance|safe }};
+if (fiData.length > 0) {
+    const fiLabels = fiData.map(d => d[0]);
+    const fiValues = fiData.map(d => d[1]);
+    new Chart(document.getElementById('featureChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: fiLabels,
+            datasets: [{
+                label: 'Importance',
+                data: fiValues,
+                backgroundColor: '#22D3EE',
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: '#5A6873' }, grid: { color: '#2A343D' } },
+                y: { ticks: { color: '#8B9AA7', font: { family: 'JetBrains Mono', size: 11 } }, grid: { display: false } }
+            }
+        }
+    });
+}
+
+// Confusion Matrix as heatmap-like bar chart
+const cmData = {{ confusion_data|safe }};
+if (cmData) {
+    const classes = ['low', 'moderate', 'high', 'severe'];
+    const colors = ['#21C97A', '#F2A93B', '#F2711C', '#E03131'];
+    const datasets = [];
+    for (let i = 0; i < classes.length; i++) {
+        datasets.push({
+            label: 'Pred: ' + classes[i],
+            data: cmData[i],
+            backgroundColor: colors[i],
+        });
+    }
+    new Chart(document.getElementById('confusionChart').getContext('2d'), {
+        type: 'bar',
+        data: { labels: classes.map(c => 'True: ' + c), datasets: datasets },
+        options: {
+            responsive: true,
+            scales: {
+                x: { stacked: true, ticks: { color: '#8B9AA7' }, grid: { color: '#2A343D' } },
+                y: { stacked: true, ticks: { color: '#5A6873' }, grid: { color: '#2A343D' } }
+            },
+            plugins: { legend: { labels: { color: '#8B9AA7' } } }
+        }
+    });
+}
+
+// ═══ What-If Predictor ═══
+const wifBtn = document.getElementById('wif-btn');
+const wifLoader = document.getElementById('wif-loader');
+const wifResult = document.getElementById('wif-result');
+const wifError = document.getElementById('wif-error');
+const csrfToken = '{{ csrf_token }}';
+
+const classColors = {
+    'low': 'var(--flow)', 'moderate': 'var(--moderate)',
+    'high': 'var(--high)', 'severe': 'var(--severe)'
+};
+const classBarColors = ['#21C97A', '#F2A93B', '#F2711C', '#E03131'];
+const classNames = ['low', 'moderate', 'high', 'severe'];
+const greenExplain = {
+    'low': 'Low congestion detected. A shorter 30-second green phase is sufficient to maintain traffic flow without unnecessary delays for cross-traffic.',
+    'moderate': 'Moderate congestion predicted. A 45-second green phase balances throughput on the main road with reasonable wait times for cross-traffic.',
+    'high': 'High congestion expected. Extended 60-second green phase recommended to maximize vehicle throughput and reduce queue buildup.',
+    'severe': 'Severe congestion forecasted. Maximum 75-second green phase recommended to allow the longest possible clearance window and prevent gridlock.'
+};
+
+wifBtn.addEventListener('click', async function() {
+    const vehicles = document.getElementById('wif-vehicles').value;
+    const hour = document.getElementById('wif-hour').value;
+    const weather = document.getElementById('wif-weather').value;
+    const intersection = document.getElementById('wif-intersection').value;
+
+    if (!vehicles) { alert('Please enter the number of vehicles.'); return; }
+
+    // UI: loading
+    wifResult.style.display = 'none';
+    wifError.style.display = 'none';
+    wifLoader.style.display = 'block';
+    wifBtn.disabled = true;
+    wifBtn.textContent = 'Predicting...';
+
+    try {
+        const resp = await fetch('/analytics/api/whatif/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+            body: JSON.stringify({
+                vehicle_count: parseInt(vehicles),
+                hour: parseInt(hour),
+                weather: weather,
+                intersection_id: intersection || null,
+            }),
+        });
+        const data = await resp.json();
+        wifLoader.style.display = 'none';
+
+        if (!resp.ok || data.error) {
+            wifError.textContent = data.error || 'Prediction failed.';
+            wifError.style.display = 'block';
+        } else {
+            // Populate results
+            const cls = data.predicted_class;
+            document.getElementById('wif-class').textContent = cls;
+            document.getElementById('wif-class').style.color = classColors[cls] || 'var(--lane-100)';
+            document.getElementById('wif-class-card').style.borderLeft = '4px solid ' + (classColors[cls] || 'var(--border)');
+            document.getElementById('wif-level').textContent = data.congestion_level;
+            document.getElementById('wif-volume').textContent = data.predicted_volume.toLocaleString();
+            document.getElementById('wif-green').textContent = data.recommended_green_seconds;
+            document.getElementById('wif-confidence').textContent = data.confidence ? (data.confidence * 100).toFixed(1) : '—';
+
+            // Probability bars
+            const probDiv = document.getElementById('wif-probabilities');
+            let probHTML = '';
+            const probs = data.class_probabilities || {};
+            classNames.forEach((name, i) => {
+                // Try numeric keys (0,1,2,3) or name keys
+                let pVal = probs[String(i)] || probs[name] || 0;
+                let pct = (pVal * 100).toFixed(1);
+                probHTML += `
+                    <div class="prob-row">
+                        <span class="prob-label">${name}</span>
+                        <div class="prob-bar-bg">
+                            <div class="prob-bar prob-bar-${i}" style="width:${pct}%"></div>
+                        </div>
+                        <span class="prob-value">${pct}%</span>
+                    </div>
+                `;
+            });
+            probDiv.innerHTML = probHTML;
+
+            // Signal explanation
+            document.getElementById('wif-signal-explain').innerHTML =
+                '<strong>Signal Timing Recommendation:</strong> ' + (greenExplain[cls] || '');
+
+            wifResult.style.display = 'block';
+        }
+    } catch (err) {
+        wifLoader.style.display = 'none';
+        wifError.textContent = 'Network error: ' + err.message;
+        wifError.style.display = 'block';
+    }
+
+    wifBtn.disabled = false;
+    wifBtn.textContent = 'Predict';
+});
+</script>
+{% endblock %}

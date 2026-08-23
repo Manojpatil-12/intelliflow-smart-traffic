@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ intersection.intersection_id }} — IntelliFlow{% endblock %}
+{% block page_title %}{{ intersection.road }}{% endblock %}
+
+{% block extra_css %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-grid">
+    <div class="metric-card">
+        <div class="metric-label">Area</div>
+        <div class="metric-value" style="font-size:1.2rem;">{{ intersection.area }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Coordinates</div>
+        <div class="metric-value mono" style="font-size:1rem;">{{ intersection.latitude|floatformat:4 }}, {{ intersection.longitude|floatformat:4 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Approaches</div>
+        <div class="metric-value">{{ intersection.num_approaches }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Coord Source</div>
+        <div class="metric-value" style="font-size:1rem;">{{ intersection.coord_source }}</div>
+    </div>
+</div>
+
+<!-- Prediction Card -->
+{% if prediction %}
+<div class="card" style="margin-top: var(--space-2);">
+    <h3>Next-Day Prediction ({{ prediction.target_date }})</h3>
+    <p style="color: var(--lane-600); font-size: 0.8rem; margin-bottom: var(--space-2);">Tomorrow's forecast — daily granularity, t+1 horizon</p>
+    <div class="dashboard-grid">
+        <div class="metric-card">
+            <div class="metric-label">Predicted Class</div>
+            <div class="metric-value">
+                {% with cls=prediction.class_probabilities.predicted_class %}
+                <span class="badge badge-{{ cls }}">{{ cls }}</span>
+                {% endwith %}
+            </div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Predicted Volume</div>
+            <div class="metric-value mono">{{ prediction.predicted_volume|floatformat:0 }}<span class="metric-unit">vehicles</span></div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Recommended Green</div>
+            <div class="metric-value mono">{{ prediction.recommended_signal_seconds }}<span class="metric-unit">s</span></div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Model Confidence</div>
+            <div class="metric-value mono">{% if prediction.model_confidence %}{{ prediction.model_confidence|floatformat:3 }}{% else %}—{% endif %}</div>
+        </div>
+    </div>
+
+    {% if prediction.class_probabilities.probabilities %}
+    <h4 style="margin-top: var(--space-2);">Class Probability Breakdown</h4>
+    <div class="probability-bars">
+        {% for cls, prob in prediction.class_probabilities.probabilities.items %}
+        <div class="prob-row">
+            <span class="prob-label">{{ cls }}</span>
+            <div class="prob-bar-bg">
+                <div class="prob-bar prob-bar-{{ cls }}" style="width: {{ prob|floatformat:0 }}%"></div>
+            </div>
+            <span class="prob-value mono">{{ prob|floatformat:2 }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% else %}
+<div class="card" style="margin-top: var(--space-2);">
+    <div class="empty-state">
+        <p class="empty-state-text">No prediction available. Run <code>python manage.py run_predictions</code>.</p>
+    </div>
+</div>
+{% endif %}
+
+<!-- Signal State -->
+{% if signal_state %}
+<div class="card">
+    <h3>Signal State</h3>
+    <div class="detail-grid">
+        <div class="detail-item">
+            <span class="detail-label">Current State</span>
+            <span class="detail-value">{{ signal_state.current_state|upper }}</span>
+        </div>
+        <div class="detail-item">
+            <span class="detail-label">Green Duration</span>
+            <span class="detail-value mono">{{ signal_state.green_duration_seconds }}s</span>
+        </div>
+        <div class="detail-item">
+            <span class="detail-label">Emergency Override</span>
+            <span class="detail-value">{% if signal_state.is_emergency_override %}<span style="color:var(--emergency);">ACTIVE</span>{% else %}No{% endif %}</span>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Historical Charts -->
+<div class="charts-row">
+    <div class="card chart-card">
+        <h3>Historical Volume</h3>
+        <canvas id="volumeChart" height="200"></canvas>
+    </div>
+    <div class="card chart-card">
+        <h3>Historical Congestion Level</h3>
+        <canvas id="congestionChart" height="200"></canvas>
+    </div>
+</div>
+
+<!-- Recent Records -->
+<div class="card">
+    <h3>Recent Traffic Records</h3>
+    {% if recent %}
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Volume</th>
+                    <th>Speed (kph)</th>
+                    <th>Congestion</th>
+                    <th>Weather</th>
+                    <th>Source</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recent %}
+                <tr>
+                    <td class="mono">{{ r.recorded_date }}</td>
+                    <td class="mono">{{ r.vehicle_count|floatformat:0 }}</td>
+                    <td class="mono">{{ r.avg_speed_kph|floatformat:1 }}</td>
+                    <td class="mono">{{ r.congestion_level|floatformat:1 }}</td>
+                    <td>{{ r.weather_condition|default:"—" }}</td>
+                    <td>{{ r.source }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p class="empty-state-text">No traffic data available.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const chartOpts = {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#8B9AA7' } } },
+    scales: {
+        x: { ticks: { color: '#5A6873', maxTicksLimit: 10 }, grid: { color: '#2A343D' } },
+        y: { ticks: { color: '#5A6873' }, grid: { color: '#2A343D' } }
+    }
+};
+
+new Chart(document.getElementById('volumeChart').getContext('2d'), {
+    type: 'line',
+    data: {
+        labels: {{ hist_dates|safe }},
+        datasets: [{
+            label: 'Volume',
+            data: {{ hist_volume|safe }},
+            borderColor: '#22D3EE',
+            backgroundColor: 'rgba(34,211,238,0.1)',
+            fill: true, tension: 0.3, pointRadius: 1,
+        }]
+    },
+    options: chartOpts
+});
+
+new Chart(document.getElementById('congestionChart').getContext('2d'), {
+    type: 'line',
+    data: {
+        labels: {{ hist_dates|safe }},
+        datasets: [{
+            label: 'Congestion Level',
+            data: {{ hist_congestion|safe }},
+            borderColor: '#F2A93B',
+            backgroundColor: 'rgba(242,169,59,0.1)',
+            fill: true, tension: 0.3, pointRadius: 1,
+        }]
+    },
+    options: chartOpts
+});
+</script>
+{% endblock %}

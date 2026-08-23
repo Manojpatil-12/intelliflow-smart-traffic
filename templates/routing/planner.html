@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Route Planner — IntelliFlow{% endblock %}
+{% block page_title %}Route Planner{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+    .route-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: var(--space-1); margin-bottom: var(--space-2); align-items: end; }
+    .route-map { height: 450px; border-radius: var(--radius); margin-bottom: var(--space-2); }
+    .leaflet-popup-content-wrapper { background: #171E24 !important; color: #F2F5F7 !important; border: 1px solid #2A343D !important; }
+    .leaflet-popup-tip { background: #171E24 !important; }
+    .eta-compare { display: flex; gap: var(--space-2); align-items: baseline; }
+    .eta-base { color: var(--lane-600); text-decoration: line-through; font-size: 0.85rem; }
+    .eta-adjusted { font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; font-weight: 500; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="banner banner-info">
+    Route scoring uses <strong>next-day predictions</strong> (daily granularity, t+1 horizon). Adjusted ETAs reflect tomorrow's forecasted congestion, not real-time conditions.
+</div>
+
+<div class="route-form">
+    <div class="form-group" style="margin-bottom:0;">
+        <label for="from-input">From</label>
+        <input type="text" id="from-input" placeholder="e.g. Koramangala, Bengaluru">
+    </div>
+    <div class="form-group" style="margin-bottom:0;">
+        <label for="to-input">To</label>
+        <input type="text" id="to-input" placeholder="e.g. Whitefield, Bengaluru">
+    </div>
+    <button class="btn btn-primary" id="find-route" style="height:38px;">Find Route</button>
+</div>
+
+<div id="route-error" class="alert alert-error" style="display:none;"></div>
+<div id="route-loading" style="display:none; color: var(--lane-400); padding: var(--space-1);">Finding routes...</div>
+
+<div id="route-map" class="route-map"></div>
+
+<div id="route-results" class="route-cards"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('route-map').setView([12.9716, 77.5946], 12);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OSM &copy; CARTO', maxZoom: 19
+}).addTo(map);
+
+let routeLayers = [];
+const csrfToken = '{{ csrf_token }}';
+
+function formatDuration(seconds) {
+    const m = Math.round(seconds / 60);
+    if (m < 60) return m + ' min';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+
+function formatDistance(meters) {
+    return (meters / 1000).toFixed(1) + ' km';
+}
+
+document.getElementById('find-route').addEventListener('click', async function() {
+    const fromQ = document.getElementById('from-input').value.trim();
+    const toQ = document.getElementById('to-input').value.trim();
+    const errorEl = document.getElementById('route-error');
+    const loadingEl = document.getElementById('route-loading');
+    const resultsEl = document.getElementById('route-results');
+
+    errorEl.style.display = 'none';
+    resultsEl.innerHTML = '';
+    routeLayers.forEach(l => map.removeLayer(l));
+    routeLayers = [];
+
+    if (!fromQ || !toQ) {
+        errorEl.textContent = 'Please enter both origin and destination.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    loadingEl.style.display = 'block';
+
+    try {
+        // Geocode both
+        const [fromGeo, toGeo] = await Promise.all([
+            fetch('/routing/api/geocode/', { method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken}, body: JSON.stringify({query: fromQ}) }).then(r => r.json()),
+            fetch('/routing/api/geocode/', { method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken}, body: JSON.stringify({query: toQ}) }).then(r => r.json()),
+        ]);
+
+        if (!fromGeo.length || !toGeo.length) {
+            throw new Error('Could not geocode one or both locations.');
+        }
+
+        const start = [parseFloat(fromGeo[0].lon), parseFloat(fromGeo[0].lat)];
+        const end = [parseFloat(toGeo[0].lon), parseFloat(toGeo[0].lat)];
+
+        // Add markers
+        const startMarker = L.marker([start[1], start[0]]).addTo(map).bindPopup('Start: ' + fromGeo[0].display_name);
+        const endMarker = L.marker([end[1], end[0]]).addTo(map).bindPopup('End: ' + toGeo[0].display_name);
+        routeLayers.push(startMarker, endMarker);
+
+        // Get routes
+        const routeResp = await fetch('/routing/api/route/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+            body: JSON.stringify({start, end}),
+        });
+        const routeData = await routeResp.json();
+
+        if (routeData.error) {
+            throw new Error(routeData.error);
+        }
+
+        if (!routeData.routes || routeData.routes.length === 0) {
+            throw new Error('No routes found.');
+        }
+
+        // Draw routes
+        const colors = ['#22D3EE', '#5A6873', '#5A6873'];
+        routeData.routes.forEach((route, idx) => {
+            if (route.geometry_coords && route.geometry_coords.length) {
+                const latlngs = route.geometry_coords.map(c => [c[1], c[0]]);
+                const line = L.polyline(latlngs, {
+                    color: colors[idx] || '#5A6873',
+                    weight: idx === 0 ? 5 : 3,
+                    opacity: idx === 0 ? 0.9 : 0.5,
+                }).addTo(map);
+                routeLayers.push(line);
+                if (idx === 0) map.fitBounds(line.getBounds(), {padding: [50, 50]});
+            }
+        });
+
+        // Render route cards
+        routeData.routes.forEach((route, idx) => {
+            const card = document.createElement('div');
+            card.className = 'route-card' + (idx === 0 ? ' selected' : '');
+            const congList = route.congested_intersections.map(c =>
+                `<span class="badge badge-${c.predicted_class}" style="margin-right:4px;">${c.intersection_id}</span>`
+            ).join('') || '<span style="color:var(--lane-600)">None detected</span>';
+
+            card.innerHTML = `
+                <h4 style="margin-bottom:8px;">Route ${idx + 1} ${idx === 0 ? '(Best)' : ''}</h4>
+                <div class="eta-compare">
+                    <span class="eta-base">${formatDuration(route.base_eta_seconds)}</span>
+                    <span class="eta-adjusted">${formatDuration(route.adjusted_eta_seconds)}</span>
+                    <span class="badge badge-${route.penalty_factor > 1.2 ? 'high' : route.penalty_factor > 1.0 ? 'moderate' : 'low'}">${route.penalty_factor}x</span>
+                </div>
+                <div style="margin-top:8px; font-size:0.8rem; color:var(--lane-400);">
+                    Distance: <strong class="mono">${formatDistance(route.base_distance_m)}</strong>
+                </div>
+                <div style="margin-top:8px;">
+                    <span style="font-size:0.75rem; color:var(--lane-600); text-transform:uppercase;">Congested intersections:</span><br>
+                    ${congList}
+                </div>
+            `;
+            resultsEl.appendChild(card);
+        });
+
+    } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.style.display = 'block';
+    } finally {
+        loadingEl.style.display = 'none';
+    }
+});
+</script>
+{% endblock %}

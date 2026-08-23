@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Intersections — IntelliFlow{% endblock %}
+{% block page_title %}Intersections{% endblock %}
+
+{% block content %}
+{% if items %}
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Intersection</th>
+                <th>Area</th>
+                <th>Tomorrow's Forecast</th>
+                <th>Pred. Volume</th>
+                <th>Confidence</th>
+                <th>Lat</th>
+                <th>Lng</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td><a href="/map/intersections/{{ item.intersection.pk }}/">{{ item.intersection.road }}</a></td>
+                <td>{{ item.intersection.area }}</td>
+                <td>
+                    {% if item.congestion_class %}
+                    <span class="badge badge-{{ item.congestion_class }}">{{ item.congestion_class }}</span>
+                    {% else %}
+                    <span class="badge">—</span>
+                    {% endif %}
+                </td>
+                <td class="mono">{% if item.prediction %}{{ item.prediction.predicted_volume|floatformat:0 }}{% else %}—{% endif %}</td>
+                <td class="mono">{% if item.prediction and item.prediction.model_confidence %}{{ item.prediction.model_confidence|floatformat:2 }}{% else %}—{% endif %}</td>
+                <td class="mono">{{ item.intersection.latitude|floatformat:4 }}</td>
+                <td class="mono">{{ item.intersection.longitude|floatformat:4 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <p class="empty-state-text">No intersections found. Run <code>python manage.py seed_from_artifacts</code>.</p>
+</div>
+{% endif %}
+{% endblock %}

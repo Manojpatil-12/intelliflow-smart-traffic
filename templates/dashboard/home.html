@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Dashboard — IntelliFlow{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block extra_css %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- Weather + Summary Row -->
+<div style="display:grid; grid-template-columns: 280px 1fr; gap:1.2rem; margin-bottom:1.2rem;">
+    <!-- Live Weather Card -->
+    <div class="card" id="weatherCard" style="padding:1.2rem; display:flex; flex-direction:column; justify-content:center; min-height:170px;">
+        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.6rem;">
+            <span style="font-size:0.75rem; text-transform:uppercase; letter-spacing:1px; color:var(--text-secondary);">Live Weather</span>
+            <span style="font-size:0.55rem; color:var(--text-muted);">Bangalore</span>
+        </div>
+        <div id="weatherLoading" style="text-align:center; padding:1rem;">
+            <div style="color:var(--text-muted); font-size:0.85rem;">Loading weather...</div>
+        </div>
+        <div id="weatherContent" style="display:none;">
+            <div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:0.6rem;">
+                <span id="weatherIcon" style="font-size:2.2rem;"></span>
+                <div>
+                    <div id="weatherTemp" style="font-size:2rem; font-weight:700; color:var(--text-primary); line-height:1;"></div>
+                    <div id="weatherCondition" style="font-size:0.85rem; color:var(--cyan); margin-top:2px;"></div>
+                </div>
+            </div>
+            <div style="display:flex; gap:1.2rem; font-size:0.8rem; color:var(--text-secondary);">
+                <div>Humidity: <span id="weatherHumidity" style="color:var(--text-primary); font-weight:600;"></span></div>
+                <div>Wind: <span id="weatherWind" style="color:var(--text-primary); font-weight:600;"></span></div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.6rem; color:var(--text-muted);">Source: Open-Meteo</div>
+        </div>
+        <div id="weatherError" style="display:none; text-align:center; padding:0.5rem;">
+            <div style="color:var(--severe); font-size:0.8rem;">Weather unavailable</div>
+        </div>
+    </div>
+
+    <!-- Summary Cards Grid -->
+    <div class="dashboard-grid">
+        <div class="metric-card">
+            <div class="metric-label">Active Intersections</div>
+            <div class="metric-value">{{ active_count }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Tomorrow High/Severe</div>
+            <div class="metric-value" style="color: var(--severe);">{{ severe_count }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Mean Predicted Volume</div>
+            <div class="metric-value">{{ mean_volume|floatformat:0 }}<span class="metric-unit">vehicles</span></div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Open Emergencies</div>
+            <div class="metric-value" {% if open_emergencies > 0 %}style="color: var(--emergency);"{% endif %}>{{ open_emergencies }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="charts-row">
+    <div class="card chart-card">
+        <h3>City Volume Trend</h3>
+        <div style="position:relative; height:220px;">
+            <canvas id="volumeChart"></canvas>
+        </div>
+    </div>
+    <div class="card chart-card">
+        <h3>Congestion Distribution ({{ tomorrow }})</h3>
+        <div style="position:relative; height:220px;">
+            <canvas id="classChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Attention List -->
+<div class="card">
+    <h3>Attention: High/Severe Predictions for {{ tomorrow }}</h3>
+    {% if attention %}
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Intersection</th>
+                    <th>Class</th>
+                    <th>Volume</th>
+                    <th>Green</th>
+                    <th>Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in attention %}
+                <tr>
+                    <td><a href="/map/intersections/{{ p.intersection.pk }}/">{{ p.intersection.intersection_id }}</a></td>
+                    <td>
+                        {% with cls=p.class_probabilities.predicted_class %}
+                        <span class="badge badge-{{ cls }}">{{ cls }}</span>
+                        {% endwith %}
+                    </td>
+                    <td class="mono">{{ p.predicted_volume|floatformat:0 }}</td>
+                    <td class="mono">{{ p.recommended_signal_seconds }}s</td>
+                    <td class="mono">{% if p.model_confidence %}{{ p.model_confidence|floatformat:2 }}{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p class="empty-state-text">No high/severe predictions for tomorrow. Run <code>python manage.py run_predictions</code>.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Recent Logs -->
+<div class="card">
+    <h3>Recent System Logs</h3>
+    {% if recent_logs %}
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr><th>Time</th><th>Level</th><th>Module</th><th>Message</th></tr>
+            </thead>
+            <tbody>
+                {% for log in recent_logs %}
+                <tr>
+                    <td class="mono">{{ log.created_at|date:"Y-m-d H:i" }}</td>
+                    <td><span class="badge badge-{% if log.level == 'ERROR' %}severe{% elif log.level == 'WARNING' %}moderate{% else %}low{% endif %}">{{ log.level }}</span></td>
+                    <td>{{ log.module }}</td>
+                    <td>{{ log.message|truncatechars:80 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p class="empty-state-text">No system logs yet.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── Live Weather Widget ──
+(function() {
+    fetch("{% url 'dashboard:weather_api' %}")
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('weatherLoading').style.display = 'none';
+                document.getElementById('weatherError').style.display = 'block';
+                return;
+            }
+            document.getElementById('weatherIcon').textContent = data.icon;
+            document.getElementById('weatherTemp').textContent = data.temperature + '°C';
+            document.getElementById('weatherCondition').textContent = data.condition;
+            document.getElementById('weatherHumidity').textContent = data.humidity + '%';
+            document.getElementById('weatherWind').textContent = data.wind_speed + ' km/h';
+            document.getElementById('weatherLoading').style.display = 'none';
+            document.getElementById('weatherContent').style.display = 'block';
+        })
+        .catch(() => {
+            document.getElementById('weatherLoading').style.display = 'none';
+            document.getElementById('weatherError').style.display = 'block';
+        });
+    // Auto-refresh every 5 minutes
+    setInterval(() => {
+        fetch("{% url 'dashboard:weather_api' %}")
+            .then(r => r.json())
+            .then(data => {
+                if (!data.error) {
+                    document.getElementById('weatherIcon').textContent = data.icon;
+                    document.getElementById('weatherTemp').textContent = data.temperature + '°C';
+                    document.getElementById('weatherCondition').textContent = data.condition;
+                    document.getElementById('weatherHumidity').textContent = data.humidity + '%';
+                    document.getElementById('weatherWind').textContent = data.wind_speed + ' km/h';
+                }
+            }).catch(() => {});
+    }, 300000);
+})();
+
+// Volume Trend Chart
+const volumeCtx = document.getElementById('volumeChart').getContext('2d');
+new Chart(volumeCtx, {
+    type: 'line',
+    data: {
+        labels: {{ volume_labels|safe }},
+        datasets: [{
+            label: 'Avg Volume',
+            data: {{ volume_data|safe }},
+            borderColor: '#22D3EE',
+            backgroundColor: 'rgba(34,211,238,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#8B9AA7' } } },
+        scales: {
+            x: { ticks: { color: '#5A6873', maxTicksLimit: 10 }, grid: { color: '#2A343D' } },
+            y: { ticks: { color: '#5A6873' }, grid: { color: '#2A343D' } }
+        }
+    }
+});
+
+// Class Distribution Chart
+const classCtx = document.getElementById('classChart').getContext('2d');
+const classDist = {{ class_dist|safe }};
+new Chart(classCtx, {
+    type: 'doughnut',
+    data: {
+        labels: ['Low', 'Moderate', 'High', 'Severe'],
+        datasets: [{
+            data: [classDist.low, classDist.moderate, classDist.high, classDist.severe],
+            backgroundColor: ['#21C97A', '#F2A93B', '#F2711C', '#E03131'],
+            borderColor: '#171E24',
+            borderWidth: 2,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { position: 'bottom', labels: { color: '#8B9AA7', padding: 12, font: { size: 11 } } }
+        }
+    }
+});
+</script>
+{% endblock %}

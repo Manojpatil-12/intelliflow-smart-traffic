@@ -1,0 +1,66 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}IntelliFlow{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/signal-grid.css' %}?v=2">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    {% if user.is_authenticated %}
+    <div class="app-layout">
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <span class="brand-icon">&#9632;</span>
+                <span class="brand-text">IntelliFlow</span>
+            </div>
+            <nav class="sidebar-nav">
+                {% for item in nav_items %}
+                <a href="{{ item.url }}" class="nav-item {% if request.path == item.url %}active{% endif %}">
+                    <span class="nav-icon">{{ item.icon|safe }}</span> {{ item.label }}
+                </a>
+                {% endfor %}
+            </nav>
+            <div class="sidebar-footer">
+                <span class="user-info">{{ user.username }} ({{ user.role }})</span>
+                <a href="{% url 'accounts:logout' %}" class="nav-item logout-link">Logout</a>
+            </div>
+        </aside>
+        <main class="main-content">
+            <header class="topbar">
+                <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+                <div class="topbar-status">
+                    {% if registry_healthy %}
+                    <span class="status-dot connected" title="Model registry healthy">&#9679;</span>
+                    <span class="status-label">ML OK</span>
+                    {% else %}
+                    <span class="status-dot" title="Model registry unhealthy">&#9679;</span>
+                    <span class="status-label">ML ERR</span>
+                    {% endif %}
+                    <span class="status-dot" id="ws-status" title="WebSocket disconnected">&#9679;</span>
+                    <span class="status-label">WS</span>
+                </div>
+            </header>
+            <div class="content-area">
+                {% if messages %}
+                <div class="messages">
+                    {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+    {% else %}
+    {% block auth_content %}{% endblock %}
+    {% endif %}
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

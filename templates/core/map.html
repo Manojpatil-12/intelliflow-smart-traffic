@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Live Map — IntelliFlow{% endblock %}
+{% block page_title %}Live Map{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+    .content-area { padding: var(--space-1); }
+    .map-legend {
+        background: var(--asphalt-800);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 8px 12px;
+        font-size: 0.75rem;
+    }
+    .map-legend h4 { margin: 0 0 6px; color: var(--lane-100); font-size: 0.8rem; }
+    .legend-item { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; cursor: pointer; }
+    .legend-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .legend-item.disabled .legend-dot { opacity: 0.2; }
+    .legend-item.disabled span { text-decoration: line-through; opacity: 0.5; }
+    .ws-banner {
+        position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+        z-index: 1000; background: rgba(224,49,49,0.9); color: #fff;
+        padding: 6px 16px; border-radius: 20px; font-size: 0.8rem; display: none;
+    }
+    .leaflet-popup-content-wrapper {
+        background: #171E24 !important;
+        color: #F2F5F7 !important;
+        border: 1px solid #2A343D !important;
+        border-radius: 8px !important;
+    }
+    .leaflet-popup-tip { background: #171E24 !important; }
+    .popup-title { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 0.9rem; margin-bottom: 6px; }
+    .popup-row { font-size: 0.8rem; color: #8B9AA7; margin-bottom: 3px; }
+    .popup-row strong { color: #F2F5F7; font-family: 'JetBrains Mono', monospace; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="position: relative;">
+    <div class="ws-banner" id="ws-banner">Reconnecting to live feed...</div>
+    <div id="map-container"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const MARKERS_DATA = {{ markers_json|safe }};
+const CLASS_COLORS = { low: '#21C97A', moderate: '#F2A93B', high: '#F2711C', severe: '#E03131' };
+const FILTER_STATE = { low: true, moderate: true, high: true, severe: true };
+
+// Map init
+const map = L.map('map-container').setView([12.9716, 77.5946], 12);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OSM &copy; CARTO',
+    maxZoom: 19
+}).addTo(map);
+
+// Markers
+const markers = {};
+
+function getRadius(volume) {
+    const minR = 8, maxR = 25;
+    const minV = 5000, maxV = 50000;
+    return minR + (maxR - minR) * Math.min(Math.max((volume - minV) / (maxV - minV), 0), 1);
+}
+
+function createMarker(d) {
+    const color = CLASS_COLORS[d.predicted_class] || '#8B9AA7';
+    const radius = getRadius(d.predicted_volume);
+    const marker = L.circleMarker([d.lat, d.lng], {
+        radius: radius,
+        fillColor: color,
+        fillOpacity: 0.7,
+        color: color,
+        weight: 1,
+        opacity: 0.9,
+    }).addTo(map);
+
+    marker.bindPopup(`
+        <div class="popup-title">${d.intersection_id}</div>
+        <div class="popup-row">Area: <strong>${d.area}</strong></div>
+        <div class="popup-row">Tomorrow's forecast: <strong style="color:${color}">${d.predicted_class.toUpperCase()}</strong></div>
+        <div class="popup-row">Predicted volume: <strong>${Math.round(d.predicted_volume).toLocaleString()}</strong> vehicles</div>
+        <div class="popup-row">Confidence: <strong>${d.confidence ? d.confidence.toFixed(2) : '—'}</strong></div>
+        <div class="popup-row">Recommended green: <strong>${d.recommended_green}s</strong></div>
+        <div class="popup-row">Target date: <strong>${d.target_date}</strong></div>
+        <div class="popup-row"><a href="/map/intersections/${d.id}/" style="color:#22D3EE">View details →</a></div>
+    `);
+
+    marker._data = d;
+    return marker;
+}
+
+MARKERS_DATA.forEach(d => {
+    markers[d.intersection_id] = createMarker(d);
+});
+
+// Legend
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = function() {
+    const div = L.DomUtil.create('div', 'map-legend');
+    div.innerHTML = '<h4>Congestion Class</h4>';
+    ['low', 'moderate', 'high', 'severe'].forEach(cls => {
+        div.innerHTML += `<div class="legend-item" data-cls="${cls}" onclick="toggleClass('${cls}', this)">
+            <span class="legend-dot" style="background:${CLASS_COLORS[cls]}"></span>
+            <span>${cls.charAt(0).toUpperCase() + cls.slice(1)}</span>
+        </div>`;
+    });
+    return div;
+};
+legend.addTo(map);
+
+function toggleClass(cls, el) {
+    FILTER_STATE[cls] = !FILTER_STATE[cls];
+    el.classList.toggle('disabled');
+    Object.values(markers).forEach(m => {
+        const d = m._data;
+        if (FILTER_STATE[d.predicted_class]) {
+            if (!map.hasLayer(m)) map.addLayer(m);
+        } else {
+            if (map.hasLayer(m)) map.removeLayer(m);
+        }
+    });
+}
+
+// WebSocket
+const wsStatus = document.getElementById('ws-status');
+const wsBanner = document.getElementById('ws-banner');
+let ws = null;
+let wsRetryDelay = 1000;
+let pollInterval = null;
+
+function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws/traffic/`);
+
+    ws.onopen = function() {
+        wsStatus.classList.add('connected');
+        wsStatus.title = 'WebSocket connected';
+        wsBanner.style.display = 'none';
+        wsRetryDelay = 1000;
+        if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    };
+
+    ws.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        if (data.type === 'prediction_update' || data.intersection_id) {
+            updateMarker(data);
+        }
+    };
+
+    ws.onclose = function() {
+        wsStatus.classList.remove('connected');
+        wsStatus.title = 'WebSocket disconnected';
+        wsBanner.style.display = 'block';
+        // Exponential backoff
+        setTimeout(connectWS, Math.min(wsRetryDelay, 30000));
+        wsRetryDelay *= 2;
+        // Fall back to polling
+        if (!pollInterval) {
+            pollInterval = setInterval(pollUpdates, 60000);
+            wsBanner.textContent = 'WebSocket disconnected — polling every 60s';
+        }
+    };
+
+    ws.onerror = function() { ws.close(); };
+}
+
+function updateMarker(data) {
+    const key = data.intersection_id;
+    if (markers[key]) {
+        const m = markers[key];
+        const color = CLASS_COLORS[data.predicted_class] || '#8B9AA7';
+        m.setStyle({ fillColor: color, color: color, radius: getRadius(data.predicted_volume || m._data.predicted_volume) });
+        m._data = Object.assign(m._data, data);
+        // Beacon flash
+        m.setStyle({ fillOpacity: 1 });
+        setTimeout(() => m.setStyle({ fillOpacity: 0.7 }), 400);
+    }
+}
+
+function pollUpdates() {
+    fetch('/api/predictions/latest/')
+        .then(r => r.json())
+        .then(data => { if (Array.isArray(data)) data.forEach(updateMarker); })
+        .catch(() => {});
+}
+
+connectWS();
+</script>
+{% endblock %}

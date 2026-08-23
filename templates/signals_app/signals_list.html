@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Signals — IntelliFlow{% endblock %}
+{% block page_title %}Signal Control{% endblock %}
+
+{% block content %}
+<div class="banner banner-warning">
+    <strong>Decision support only</strong> — no physical traffic signal hardware is controlled by this system.
+</div>
+
+{% if items %}
+<div class="signals-grid">
+    {% for item in items %}
+    <div class="card {% if item.signal.is_emergency_override %}emergency-active{% endif %}">
+        <h4>{{ item.signal.intersection.road }}</h4>
+        <p style="color:var(--lane-600); font-size:0.75rem;">{{ item.signal.intersection.area }}</p>
+
+        <div class="detail-grid" style="margin-top: var(--space-1);">
+            <div class="detail-item">
+                <span class="detail-label">State</span>
+                <span class="detail-value" style="color: {% if item.signal.current_state == 'green' %}var(--flow){% elif item.signal.current_state == 'yellow' %}var(--moderate){% else %}var(--severe){% endif %};">
+                    {{ item.signal.current_state|upper }}
+                </span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Current Green</span>
+                <span class="detail-value mono">{{ item.signal.green_duration_seconds }}s</span>
+            </div>
+            {% if item.recommended_green %}
+            <div class="detail-item">
+                <span class="detail-label">Recommended</span>
+                <span class="detail-value mono">{{ item.recommended_green }}s</span>
+            </div>
+            {% endif %}
+            {% if item.delta is not None %}
+            <div class="detail-item">
+                <span class="detail-label">Delta</span>
+                <span class="detail-value mono" style="color: {% if item.delta > 0 %}var(--high){% elif item.delta < 0 %}var(--flow){% else %}var(--lane-400){% endif %};">
+                    {% if item.delta > 0 %}+{% endif %}{{ item.delta }}s
+                </span>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if item.predicted_class %}
+        <div style="margin-top: var(--space-1);">
+            <span class="badge badge-{{ item.predicted_class }}">{{ item.predicted_class }}</span>
+        </div>
+        {% endif %}
+
+        {% if item.signal.is_emergency_override %}
+        <div style="margin-top: var(--space-1); color: var(--emergency); font-size: 0.8rem; font-weight: 500;">
+            ⚠ EMERGENCY OVERRIDE ACTIVE
+        </div>
+        {% endif %}
+
+        <form method="post" action="{% url 'signals_app:signal_override' item.signal.pk %}" style="margin-top: var(--space-1); display: flex; gap: 6px; align-items: end;">
+            {% csrf_token %}
+            <div class="form-group" style="margin-bottom:0; flex:1;">
+                <label>Set green (s)</label>
+                <input type="number" name="green_duration" value="{{ item.recommended_green|default:item.signal.green_duration_seconds }}" min="20" max="90" style="width:100%;">
+            </div>
+            <input type="hidden" name="reason" value="Manual UI override">
+            <button class="btn btn-primary" type="submit" style="height:38px; white-space:nowrap;">Apply</button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p class="empty-state-text">No signal states found. Run <code>seed_from_artifacts</code> first.</p>
+</div>
+{% endif %}
+{% endblock %}
