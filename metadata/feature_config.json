@@ -1,0 +1,66 @@
+{
+  "feature_version": "1.0.0",
+  "trained_at": "2026-08-10T20:17:37.480842",
+  "dataset_rows": 8936,
+  "feature_rows": 14983,
+  "n_features": 83,
+  "lag_days": [
+    1,
+    2,
+    3,
+    7,
+    14
+  ],
+  "roll_windows": [
+    3,
+    7,
+    14
+  ],
+  "warmup_days": 14,
+  "min_history_days": 21,
+  "congestion_bins": [
+    "-inf",
+    "40.0",
+    "65.0",
+    "85.0",
+    "inf"
+  ],
+  "congestion_labels": [
+    "low",
+    "moderate",
+    "high",
+    "severe"
+  ],
+  "green_time_map": {
+    "low": 30,
+    "moderate": 45,
+    "high": 60,
+    "severe": 75
+  },
+  "split": {
+    "train": {
+      "rows": 10480,
+      "from": "2022-01-15",
+      "to": "2023-11-01"
+    },
+    "val": {
+      "rows": 2256,
+      "from": "2023-11-02",
+      "to": "2024-03-21"
+    },
+    "test": {
+      "rows": 2247,
+      "from": "2024-03-22",
+      "to": "2024-08-09"
+    }
+  },
+  "target_horizon": "t+1 day",
+  "granularity": "daily",
+  "libraries": {
+    "xgboost": "3.1.1",
+    "lightgbm": "4.6.0",
+    "catboost": null,
+    "tensorflow": "2.20.0",
+    "holidays": null
+  }
+}
